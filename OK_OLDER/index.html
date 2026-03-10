@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualizador 3D de Canto de Pájaro</title>
+    <style>
+        body { margin: 0; font-family: Arial, sans-serif; background-color: #111; color: white; overflow: hidden; }
+        #scene-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+        #controls { position: fixed; top: 20px; left: 20px; z-index: 10; background: rgba(0, 0, 0, 0.5); padding: 15px; border-radius: 8px; }
+        video { position: fixed; bottom: 20px; left: 20px; width: 300px; z-index: 10; }
+        button { font-size: 16px; padding: 10px 15px; cursor: pointer; }
+    </style>
+
+    <script src="./meyda.min.js"></script>
+
+</head>
+<body>
+
+    <div id="scene-container"></div>
+    <div id="controls">
+        <button id="startButton">Iniciar Visualización</button>
+    </div>
+    <video id="birdVideo" src="bird.mp4" controls loop muted></video>
+
+    <script type="module">
+        import * as THREE from './three.module.js';
+        import { OrbitControls } from './OrbitControls.js';
+        
+        // --- 1. CONFIGURACIÓN BÁSICA DE THREE.JS ---
+        let scene, camera, renderer, controls;
+        const sceneContainer = document.getElementById('scene-container');
+        let gridHelper; 
+
+        function initThree() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            // ======================================================
+            // CAMBIO: La cámara se posiciona y mira al centro (0, y, 0)
+            // ======================================================
+            camera.position.set(0, 10, 20); // x=0 (centrada), y=10 (altura media), z=20 (lejos)
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            sceneContainer.appendChild(renderer.domElement);
+            controls = new OrbitControls(camera, renderer.domElement);
+
+            // Apuntamos la cámara al centro de la acción
+            controls.target.set(0, 10, 0); // Apuntamos a x=0, y=10, z=0
+            
+            controls.autoRotate = false; // Cámara fija
+            controls.enableDamping = true;
+            controls.update(); 
+            
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            const pointLight = new THREE.PointLight(0xffffff, 1);
+            pointLight.position.set(10, 10, 10);
+            scene.add(pointLight);
+            gridHelper = new THREE.GridHelper(50, 50, 0x888888, 0x444444);
+            scene.add(gridHelper); 
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        // --- 2. LÓGICA DE AUDIO Y MEYDA.JS ---
+        // (Sin cambios)
+        const videoElement = document.getElementById('birdVideo');
+        const startButton = document.getElementById('startButton');
+        let audioContext;
+        let meydaAnalyzer;
+
+        function audioCallback(features) {
+            plotPoint(features);
+        }
+        
+        startButton.addEventListener('click', () => {
+            if (!audioContext) {
+                audioContext = new AudioContext();
+                const source = audioContext.createMediaElementSource(videoElement);
+                source.connect(audioContext.destination);
+                videoElement.muted = false;
+
+                meydaAnalyzer = Meyda.createMeydaAnalyzer({
+                    audioContext: audioContext,
+                    source: source,
+                    bufferSize: 4096, 
+                    featureExtractors: [
+                        "spectralCentroid", 
+                        "spectralSpread",   
+                        "spectralFlatness"  
+                    ],
+                    callback: audioCallback
+                });
+            }
+            audioContext.resume();
+            meydaAnalyzer.start();
+            videoElement.play();
+            startButton.textContent = "Analizando...";
+            startButton.disabled = true;
+        });
+
+        // ======================================================
+        // --- 3. CONFIGURACIÓN DE ESCALA DE PUNTOS ---
+        // ¡Modifica estos valores para cambiar la forma de la nube!
+        // ======================================================
+        
+        // Multiplicadores (números más grandes = más separación)
+        const escalaVertical = 15.0;    // Eje Y (Tono)
+        const escalaHorizontal = 20.0;  // Eje X (Amplitud)
+        const escalaProfundidad = 30.0; // Eje Z (Ruido/Tono)
+
+        // Puntos centrales (estos son los promedios "supuestos" del audio)
+        // Ajusta estos si la nube sigue sin estar centrada
+        const centroVertical = 700.0; // Promedio de spectralCentroid
+        const centroHorizontal = 200.0; // Promedio de spectralSpread
+        const centroProfundidad = 0.2;   // Promedio de spectralFlatness (siempre 0.5)
+
+        // Divisores (para normalizar los valores antes de aplicar la escala)
+        const divisorVertical = 1000.0;
+        const divisorHorizontal = 1000.0;
+        // ======================================================
+
+        const pointGeometry = new THREE.SphereGeometry(0.2, 8, 8); 
+
+        function plotPoint(features) {
+            if (!features) return; 
+
+            const jitterX = (Math.random() - 0.5) * 0.5;
+            const jitterY = (Math.random() - 0.5) * 0.5;
+            const jitterZ = (Math.random() - 0.5) * 0.5;
+
+            // ======================================================
+            // CAMBIO: Usamos las nuevas variables para centrar en 0,0,0
+            // ======================================================
+            const y = ((features.spectralCentroid - centroVertical) / divisorVertical) * escalaVertical + 10 + jitterY;
+            const x = ((features.spectralSpread - centroHorizontal) / divisorHorizontal) * escalaHorizontal + jitterX;
+            const z = (features.spectralFlatness - centroProfundidad) * escalaProfundidad + jitterZ;
+            
+            if (isNaN(x) || isNaN(y) || isNaN(z)) return;
+
+            const color = new THREE.Color();
+            const hue = (features.spectralCentroid / 2000) % 1.0; 
+            color.setHSL(hue, 1.0, 0.5); 
+
+            const material = new THREE.MeshStandardMaterial({ 
+                color: color, 
+                emissive: color,
+                emissiveIntensity: 0.5 
+            });
+            const pointMesh = new THREE.Mesh(pointGeometry, material);
+            pointMesh.position.set(x, y, z);
+            scene.add(pointMesh);
+
+            if (scene.children.length > 500) { 
+                const oldPoint = scene.children.find(child => child.isMesh && child !== gridHelper);
+                if (oldPoint) {
+                    scene.remove(oldPoint);
+                    oldPoint.geometry.dispose();
+                    oldPoint.material.dispose();
+                }
+            }
+        }
+        
+        // --- 4. BUCLE DE ANIMACIÓN ---
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update(); 
+            renderer.render(scene, camera);
+        }
+
+        // Iniciar todo
+        initThree();
+        animate();
+    </script>
+</body>
+</html>

@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualizador 3D - Alien Master</title>
+    <style>
+        body { margin: 0; font-family: 'Courier New', Courier, monospace; background-color: #000; color: white; overflow: hidden; }
+        #scene-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; pointer-events: all; }
+        
+        /* Panel de Control */
+        #controls { 
+            position: fixed; 
+            top: 20px; 
+            left: 20px; 
+            z-index: 10; 
+            background: rgba(0, 20, 0, 0.85); 
+            padding: 15px; 
+            border-radius: 12px; 
+            border: 1px solid #0f0;
+            box-shadow: 0 0 15px #0f0;
+            min-width: 200px;
+        }
+
+        /* Videos */
+        .fullscreen-video {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            min-width: 100%;
+            min-height: 100%;
+            width: auto;
+            height: auto;
+            transform: translate(-50%, -50%);
+            object-fit: cover;
+        }
+
+        #birdVideo { z-index: -2; }
+        #overlayVideo {
+            z-index: -1;
+            opacity: 0; 
+            mix-blend-mode: screen; 
+            filter: hue-rotate(90deg) contrast(1.5) saturate(1.5); 
+            transition: opacity 0.2s ease-out;
+        }
+
+        button { 
+            font-size: 16px; 
+            padding: 8px 16px;
+            cursor: pointer; 
+            background: #111; 
+            color: #0f0; 
+            border: 1px solid #0f0; 
+            border-radius: 4px; 
+            margin: 5px;
+            text-transform: uppercase;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        button:hover { background: #0f0; color: #000; }
+        
+        .btn-round { width: 40px; height: 40px; border-radius: 50%; font-size: 20px; padding: 0; }
+        
+        .fx-group { display: none; margin-top: 10px; border-top: 1px solid #0f0; padding-top: 10px; }
+        
+        /* Estadísticas del Caos */
+        .stat-row { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 3px; color: #0f0; }
+    </style>
+
+    <!-- CDN Imports -->
+    <script src="https://unpkg.com/meyda/dist/web/meyda.min.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="scene-container"></div>
+
+    <div id="controls">
+        <div id="startContainer" style="text-align: center;">
+            <button id="startButton">INICIAR SISTEMA</button>
+        </div>
+        
+        <div class="fx-group">
+            <div style="margin-bottom: 10px; font-weight: bold; color: #0f0; text-align: center;">NIVELES DE CAOS</div>
+            
+            <div style="background: rgba(0,0,0,0.5); padding: 8px; border-radius: 4px; margin-bottom: 10px;">
+                <div class="stat-row"><span>VIDEO (Progresivo):</span> <span id="val-video">0%</span></div>
+                <div class="stat-row"><span>RING MOD (Random):</span> <span id="val-ring">0%</span></div>
+                <div class="stat-row"><span>DISTORTION (Random):</span> <span id="val-dist">0%</span></div>
+                <div class="stat-row"><span>DELAY (Random):</span> <span id="val-delay">0%</span></div>
+                <div class="stat-row"><span>REVERB (Random):</span> <span id="val-verb">0%</span></div>
+            </div>
+
+            <div style="display: flex; align-items: center; justify-content: center; gap: 15px;">
+                <button id="btnMinus" class="btn-round">-</button>
+                <button id="btnPlus" class="btn-round">+</button>
+            </div>
+        </div>
+    </div>
+
+    <video id="birdVideo" class="fullscreen-video" src="bird.mp4" playsinline crossorigin="anonymous"></video>
+    <video id="overlayVideo" class="fullscreen-video" src="bird.mp4" loop muted playsinline crossorigin="anonymous"></video>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        
+        // ==========================================
+        // 1. CONFIGURACIÓN THREE.JS (RESTAURADA EXACTAMENTE)
+        // ==========================================
+        let scene, camera, renderer, controls;
+        let gridHelper; 
+        let pointGeometry; 
+
+        function initThree() {
+            scene = new THREE.Scene();
+            
+            // CÁMARA ORIGINAL: Posición (0, 10, 20)
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 10, 20); 
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); 
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x000000, 0); // Transparente para ver videos
+            document.getElementById('scene-container').appendChild(renderer.domElement);
+            
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, 10, 0); // Target original
+            controls.autoRotate = false;   // Sin autorotación por defecto
+            controls.enableDamping = true;
+            
+            // LUCES ORIGINALES
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            const pointLight = new THREE.PointLight(0xffffff, 1);
+            pointLight.position.set(10, 10, 10);
+            scene.add(pointLight);
+
+            // GRID HELPER (LA CUADRÍCULA HA VUELTO)
+            gridHelper = new THREE.GridHelper(50, 50, 0x888888, 0x444444);
+            scene.add(gridHelper); 
+
+            // GEOMETRÍA ORIGINAL (Sphere 0.2)
+            pointGeometry = new THREE.SphereGeometry(0.2, 8, 8); 
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        // ==========================================
+        // 2. MOTOR DE AUDIO (ALIEN CHAOS ENGINE)
+        // ==========================================
+        const videoElement = document.getElementById('birdVideo');
+        const overlayVideo = document.getElementById('overlayVideo');
+        
+        let audioContext;
+        let meydaAnalyzer;
+        let sourceNode, dryGain, wetGain, masterGain;
+        let ringOsc, ringGain, distortionNode, delayNode, delayFeedback, convolver;
+        
+        // ESTADO DEL CAOS
+        let alienState = {
+            videoOpacity: 0.0,
+            ringModLevel: 0.0,
+            distortionLevel: 0.0,
+            delayLevel: 0.0,
+            reverbLevel: 0.0
+        };
+
+        // Función de distorsión
+        function makeDistortionCurve(amount) {
+            const k = typeof amount === 'number' ? amount : 50;
+            const n_samples = 44100;
+            const curve = new Float32Array(n_samples);
+            const deg = Math.PI / 180;
+            for (let i = 0; i < n_samples; ++i) {
+                const x = i * 2 / n_samples - 1;
+                curve[i] = (3 + k) * x * 20 * deg / (Math.PI + k * Math.abs(x));
+            }
+            return curve;
+        }
+
+        // Buffer Reverb
+        function createReverbBuffer(ctx) {
+            const len = ctx.sampleRate * 3; 
+            const buffer = ctx.createBuffer(2, len, ctx.sampleRate);
+            for (let i = 0; i < len; i++) {
+                const decay = Math.pow(1 - i / len, 2);
+                buffer.getChannelData(0)[i] = (Math.random() * 2 - 1) * decay;
+                buffer.getChannelData(1)[i] = (Math.random() * 2 - 1) * decay;
+            }
+            return buffer;
+        }
+
+        // /CAMBIO/ Lógica de actualización pedida:
+        // + : Video progresivo (10%), Efectos aleatorios (10% - 40%)
+        // - : Reducción progresiva. Si video llega a 0 -> Todo a 0.
+        function updateChaosEngine(isIncreasing) {
+            if (!audioContext) return;
+
+            if (isIncreasing) {
+                // Video sube fijo 0.1
+                alienState.videoOpacity = Math.min(1.0, alienState.videoOpacity + 0.1);
+                
+                // Efectos suben RANDOM
+                alienState.ringModLevel = Math.min(1.0, alienState.ringModLevel + (Math.random() * 0.3 + 0.1));
+                alienState.distortionLevel = Math.min(1.0, alienState.distortionLevel + (Math.random() * 0.3 + 0.1));
+                alienState.delayLevel = Math.min(1.0, alienState.delayLevel + (Math.random() * 0.3 + 0.1));
+                alienState.reverbLevel = Math.min(1.0, alienState.reverbLevel + (Math.random() * 0.3 + 0.1));
+            } else {
+                // Disminución
+                alienState.videoOpacity = Math.max(0.0, alienState.videoOpacity - 0.1);
+                
+                // Si video llega a 0, matar efectos
+                if (alienState.videoOpacity <= 0.001) {
+                    alienState.ringModLevel = 0;
+                    alienState.distortionLevel = 0;
+                    alienState.delayLevel = 0;
+                    alienState.reverbLevel = 0;
+                    alienState.videoOpacity = 0;
+                } else {
+                    // Reducción normal de efectos
+                    const decay = 0.1;
+                    alienState.ringModLevel = Math.max(0, alienState.ringModLevel - decay);
+                    alienState.distortionLevel = Math.max(0, alienState.distortionLevel - decay);
+                    alienState.delayLevel = Math.max(0, alienState.delayLevel - decay);
+                    alienState.reverbLevel = Math.max(0, alienState.reverbLevel - decay);
+                }
+            }
+            
+            applyAudioParams();
+            updateUI();
+        }
+
+        function applyAudioParams() {
+            const t = audioContext.currentTime;
+            const ramp = 0.1;
+
+            // 1. Video Opacity
+            overlayVideo.style.opacity = alienState.videoOpacity;
+
+            // 2. Mezcla General: Si hay caos, bajamos dry y subimos wet
+            const maxChaos = Math.max(alienState.ringModLevel, alienState.distortionLevel);
+            dryGain.gain.setTargetAtTime(1.0 - (maxChaos * 0.5), t, ramp);
+            
+            // El Wet Gain general se basa en el promedio de los efectos activos
+            const avgEffects = (alienState.ringModLevel + alienState.distortionLevel + alienState.delayLevel + alienState.reverbLevel) / 4;
+            wetGain.gain.setTargetAtTime(Math.min(1.0, avgEffects * 2.0), t, ramp); 
+
+            // 3. Ring Modulator (Frecuencia controlada por nivel)
+            const ringFreq = alienState.ringModLevel * 1500; 
+            ringOsc.frequency.setTargetAtTime(ringFreq, t, ramp);
+            
+            // 4. Delay Feedback
+            delayFeedback.gain.setTargetAtTime(alienState.delayLevel * 0.7, t, ramp); 
+        }
+
+        function updateUI() {
+            document.getElementById('val-video').innerText = Math.round(alienState.videoOpacity * 100) + "%";
+            document.getElementById('val-ring').innerText = Math.round(alienState.ringModLevel * 100) + "%";
+            document.getElementById('val-dist').innerText = Math.round(alienState.distortionLevel * 100) + "%";
+            document.getElementById('val-delay').innerText = Math.round(alienState.delayLevel * 100) + "%";
+            document.getElementById('val-verb').innerText = Math.round(alienState.reverbLevel * 100) + "%";
+        }
+
+        function audioCallback(features) {
+            if(features) plotPoint(features);
+        }
+
+        document.getElementById('startButton').addEventListener('click', async () => {
+            if (!audioContext) {
+                try {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    
+                    sourceNode = audioContext.createMediaElementSource(videoElement);
+                    dryGain = audioContext.createGain();
+                    wetGain = audioContext.createGain();
+                    masterGain = audioContext.createGain();
+                    
+                    // --- CREACIÓN EFECTOS ---
+                    // 1. Ring Mod
+                    ringOsc = audioContext.createOscillator();
+                    ringOsc.frequency.value = 0; 
+                    ringOsc.start();
+                    const ringModNode = audioContext.createGain();
+                    ringModNode.gain.value = 0.0; 
+                    ringOsc.connect(ringModNode.gain); 
+
+                    // 2. Distortion
+                    distortionNode = audioContext.createWaveShaper();
+                    distortionNode.curve = makeDistortionCurve(400);
+                    distortionNode.oversample = '4x';
+
+                    // 3. Delay
+                    delayNode = audioContext.createDelay();
+                    delayNode.delayTime.value = 0.3;
+                    delayFeedback = audioContext.createGain();
+                    delayFeedback.gain.value = 0; 
+                    delayNode.connect(delayFeedback);
+                    delayFeedback.connect(delayNode);
+
+                    // 4. Reverb
+                    convolver = audioContext.createConvolver();
+                    convolver.buffer = createReverbBuffer(audioContext);
+
+                    // --- ROUTING EN SERIE (Cadena de destrucción) ---
+                    // Dry
+                    sourceNode.connect(dryGain);
+                    dryGain.connect(masterGain);
+
+                    // Wet: Source -> RingMod -> Distortion -> Delay -> Reverb -> WetGain
+                    sourceNode.connect(ringModNode);
+                    ringModNode.connect(distortionNode);
+                    distortionNode.connect(delayNode);
+                    delayNode.connect(convolver);
+                    convolver.connect(wetGain);
+                    wetGain.connect(masterGain);    
+
+                    masterGain.connect(audioContext.destination);
+
+                    // Valores iniciales
+                    dryGain.gain.value = 1.0;
+                    wetGain.gain.value = 0.0;
+
+                    meydaAnalyzer = Meyda.createMeydaAnalyzer({
+                        audioContext: audioContext,
+                        source: masterGain, 
+                        bufferSize: 4096, 
+                        featureExtractors: ["spectralCentroid", "spectralSpread", "spectralFlatness"],
+                        callback: audioCallback
+                    });
+
+                    await audioContext.resume();
+                    meydaAnalyzer.start();
+                    
+                    videoElement.muted = false; 
+                    videoElement.play();
+                    overlayVideo.play();
+                    
+                    document.querySelector('.fx-group').style.display = 'block';
+                    document.getElementById('startContainer').style.display = 'none';
+
+                } catch(e) {
+                    console.error(e);
+                    alert("Error: Usa un servidor local.");
+                }
+            }
+        });
+
+        document.getElementById('btnPlus').addEventListener('click', () => updateChaosEngine(true));
+        document.getElementById('btnMinus').addEventListener('click', () => updateChaosEngine(false));
+
+        // ==========================================
+        // 3. VISUALIZACIÓN DE PUNTOS (LÓGICA ORIGINAL RESTAURADA)
+        // ==========================================
+        
+        const escalaVertical = 15.0;    
+        const escalaHorizontal = 20.0;  
+        const escalaProfundidad = 30.0; 
+
+        const centroVertical = 700.0; 
+        const centroHorizontal = 200.0; 
+        const centroProfundidad = 0.2;   
+
+        const divisorVertical = 1000.0;
+        const divisorHorizontal = 1000.0;
+
+        function plotPoint(features) {
+            if (!features) return; 
+
+            // Lógica original de posición sin alteraciones
+            const jitterX = (Math.random() - 0.5) * 0.5;
+            const jitterY = (Math.random() - 0.5) * 0.5;
+            const jitterZ = (Math.random() - 0.5) * 0.5;
+
+            const y = ((features.spectralCentroid - centroVertical) / divisorVertical) * escalaVertical + 10 + jitterY;
+            const x = ((features.spectralSpread - centroHorizontal) / divisorHorizontal) * escalaHorizontal + jitterX;
+            const z = (features.spectralFlatness - centroProfundidad) * escalaProfundidad + jitterZ;
+            
+            if (isNaN(x) || isNaN(y) || isNaN(z)) return;
+
+            const color = new THREE.Color();
+            
+            // Calculamos un factor general de "caos" para el color solamente (sin afectar posición)
+            const chaosFactor = (alienState.ringModLevel + alienState.distortionLevel + alienState.delayLevel) / 3;
+            
+            const baseHue = (features.spectralCentroid / 2000) % 1.0; 
+            const alienHue = Math.random(); 
+            
+            // Si hay efecto, el color muta ligeramente
+            const finalHue = THREE.MathUtils.lerp(baseHue, alienHue, chaosFactor * 0.5);
+
+            color.setHSL(finalHue, 1.0, 0.5); 
+
+            // Material original
+            const material = new THREE.MeshStandardMaterial({ 
+                color: color, 
+                emissive: color,
+                emissiveIntensity: 0.5 
+            });
+            
+            const pointMesh = new THREE.Mesh(pointGeometry, material);
+            pointMesh.position.set(x, y, z);
+            scene.add(pointMesh);
+
+            if (scene.children.length > 500) { 
+                // Limpieza cuidadosa para no borrar la GridHelper ni luces
+                const oldPoint = scene.children.find(child => child.isMesh && child !== gridHelper);
+                if (oldPoint) {
+                    scene.remove(oldPoint);
+                    // Importante: dispose para evitar memory leaks, pero solo el material porque la geometría es compartida
+                    if (oldPoint.material) oldPoint.material.dispose();
+                }
+            }
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update(); 
+            renderer.render(scene, camera);
+        }
+
+        initThree();
+        animate();
+    </script>
+</body>
+</html>
